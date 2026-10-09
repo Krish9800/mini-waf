@@ -42,7 +42,10 @@ class RuleRegistry:
         """Fetch active rules and patterns matching target within paranoia level."""
         active: list[tuple[WAFRule, re.Pattern[str]]] = []
         for rule_id, rule in self._rules.items():
-            if rule.target == target and rule.paranoia_level <= max_paranoia_level:
+            if (
+                rule.target in (target, LocationTarget.ANY)
+                and rule.paranoia_level <= max_paranoia_level
+            ):
                 pat = self._compiled_regexes.get(rule_id)
                 if pat:
                     active.append((rule, pat))

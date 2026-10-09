@@ -58,3 +58,4 @@ class LocationTarget(StrEnum):
     BODY = "BODY"
     USER_AGENT = "USER_AGENT"
     RESPONSE_BODY = "RESPONSE_BODY"
+    ANY = "ANY"
