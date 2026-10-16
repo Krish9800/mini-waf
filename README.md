@@ -1,152 +1,156 @@
 # Mini Web Application Firewall (`mini-waf`)
 
-[![CI](https://github.com/krish/mini-waf/actions/workflows/ci.yml/badge.svg)](https://github.com/krish/mini-waf/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Type Checked: Mypy](https://img.shields.io/badge/mypy-strict-blue.svg)](https://mypy-lang.org/)
-[![Security: Bandit](https://img.shields.io/badge/security-bandit-yellow.svg)](https://github.com/PyCQA/bandit)
+Modular Reverse-Proxy and ASGI Middleware Web Application Firewall (WAF) with Rule Compilation, Attack Mitigation, and Rate Limiting.
 
-Enterprise-Grade Modular Web Application Firewall (WAF) reverse-proxy and ASGI middleware in Python.
-
----
-
-## Features
-
-- **OWASP CRS-Inspired Security Signatures**:
-  - SQL Injection: Union-based, boolean-based, time-based, stacked queries, comment obfuscation (CWE-89).
-  - Cross-Site Scripting (XSS): Executable tag injection, inline DOM event handlers, javascript pseudo-protocols (CWE-79).
-  - Path Traversal & LFI: Directory climbing (`../`, `..\`), sensitive OS files (`/etc/passwd`, `win.ini`), null-byte poisoning (CWE-22).
-  - OS Command Injection: Shell metacharacters (`|`, `;`, `&&`, backticks, `$()`), Unix binary paths (CWE-78).
-  - Server-Side Request Forgery (SSRF): Private IPv4 ranges, cloud metadata endpoint access (CWE-918).
-  - Automated Scanner Fingerprinting: User-Agent detection for tools like sqlmap, nikto, nuclei (CWE-200).
-- **Multi-Pass Deobfuscation & Anti-Evasion**:
-  - Recursive URL percentage decoding (dismantles double encoding like `%252e%252e`).
-  - Unicode NFKC normalization (collapses full-width character homoglyphs like `＜script＞`).
-  - HTML entity unescaping (`&lt;`, `&#x3c;`).
-  - RFC 3986 path canonicalization and body size clamping to prevent DoS.
-- **Anomaly Scoring & Flexible Controls**:
-  - Configurable Paranoia Levels (1 to 4) and score thresholds.
-  - Dual modes: `BLOCK` (active prevention) and `MONITOR` (passive detection/IDS mode).
-- **Rate Limiting & Dynamic IP Jail**:
-  - Sliding token bucket rate limiting per client IP.
-  - Automatic temporary banning ("jail") for IPs with repeated security violations.
-  - CIDR subnet allowlisting and permanent blocklisting.
-- **Outbound Data Leakage Shield**:
-  - Strips technology fingerprinting headers (`Server`, `X-Powered-By`).
-  - Cloaks 500 server stack traces and database driver errors.
-  - Credit card number detection with ISO/IEC 7812 Luhn checksum and middle-digit masking.
-- **Dual Deployment Options**:
-  - **Reverse Proxy**: High-concurrency async reverse proxy forwarding clean traffic via `httpx`.
-  - **ASGI Middleware**: Drop-in middleware for FastAPI, Starlette, or Quart applications.
-- **Observability & Management**:
-  - Structured JSON and ArcSight CEF audit logging for enterprise SIEM ingestion.
-  - Rich interactive CLI with simulation testing, rule filtering, and unjail commands.
-  - FastAPI management API with interactive OpenAPI docs at `/docs` on port 8083.
-  - Rootless Docker container running as non-privileged user (`UID 10001:10001`).
+[![CI Pipeline](https://github.com/Krish9800/mini-waf/actions/workflows/ci.yml/badge.svg)](https://github.com/Krish9800/mini-waf/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python: 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![ASGI: Starlette](https://img.shields.io/badge/ASGI-Starlette%20%2F%20FastAPI-009688.svg)](https://www.starlette.io/)
+[![CLI: Typer](https://img.shields.io/badge/CLI-Typer-green.svg)](https://typer.tiangolo.com/)
 
 ---
 
-## Installation
+## Overview & Problem Statement
+
+Web applications face continuous automated probing for SQL injection (SQLi), Cross-Site Scripting (XSS), Path Traversal (`../`), and Remote Code Execution (RCE). Enterprise cloud WAFs can be expensive and obscure the underlying inspection mechanics.
+
+**Mini WAF** is a lightweight, pure-Python Web Application Firewall designed to operate either as an inline reverse proxy or as pluggable ASGI middleware. It normalizes HTTP request streams (decoding URL encoding, HTML entities, and multi-byte representations), matches patterns against modular rule sets, tracks client reputation, and blocks malicious requests before they reach upstream application servers.
+
+---
+
+## Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    Client[Client HTTP Request] --> Entry[Reverse Proxy / ASGI Middleware]
+
+    subgraph Pre-Inspection & Normalization
+        Entry --> RateLimiter[Sliding-Window IP Rate Limiter]
+        RateLimiter --> Normalizer[Payload Normalizer: URL / Hex / Unicode / Case]
+    end
+
+    subgraph WAF Rule Inspection Engine
+        Normalizer --> CoreEngine{Rule Matcher}
+        CoreEngine --> SQLiRule[SQL Injection Filter: Tautologies, Unions, Stacks]
+        CoreEngine --> XSSRule[Cross-Site Scripting Filter: Script tags, Events]
+        CoreEngine --> TraversalRule[Path Traversal Filter: Directory Walking]
+        CoreEngine --> RCERule[Command Injection Filter: Subshells, Pipes]
+    end
+
+    subgraph Action & Routing
+        SQLiRule --> ActionCheck{Violation Detected?}
+        XSSRule --> ActionCheck
+        TraversalRule --> ActionCheck
+        RCERule --> ActionCheck
+
+        ActionCheck -->|Violation Block| DropResponse[HTTP 403 Forbidden / IP Jail]
+        ActionCheck -->|Clean Request| Upstream[Proxy Forward to Upstream Backend]
+    end
+```
+
+---
+
+## Verified Features
+
+- **Dual Deployment Modes:** Operates as a standalone reverse proxy forwarding to upstream services, or as native ASGI middleware embedding directly into FastAPI/Starlette applications.
+- **Payload Normalization:** Decodes nested URL percent-encoding, HTML numeric entities, double-URL encoding, and mixed casing to resist WAF evasion techniques.
+- **Core Attack Detection Rules:**
+  - SQL Injection (Tautologies `' OR '1'='1`, `UNION SELECT`, stacked queries, blind sleep payloads).
+  - Cross-Site Scripting (`<script>`, `javascript:`, DOM event handlers `onload=`, `onerror=`).
+  - Path Traversal & LFI (`../`, `..\`, null-byte terminators `%00`, encoded `/etc/passwd`).
+  - Command Injection (Shell metacharacters `;`, `|`, `&`, `$(...)`, `` `...` ``).
+- **IP Reputation & Dynamic Jailing:** Temporarily blocks repeated malicious source IPs with automatic release timers.
+- **Dual Interface:** Typer CLI for rule testing and unjailing, plus a FastAPI administrative API.
+
+---
+
+## Technology Stack
+
+- **Runtime:** Python 3.12+
+- **ASGI Framework:** Starlette & FastAPI
+- **HTTP Client:** HTTPX (for reverse-proxy forwarding)
+- **Data Validation:** Pydantic v2
+- **CLI Framework:** Typer & Rich
+- **Quality Gates:** Pytest, Ruff, Mypy Strict, Bandit
+
+---
+
+## Requirements & Installation
 
 ```bash
-# Clone repository
-git clone https://github.com/krish/mini-waf.git
+# Clone the repository
+git clone https://github.com/Krish9800/mini-waf.git
 cd mini-waf
 
-# Setup virtual environment
-python -m venv .venv
+# Create and activate virtual environment
+python3 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 ---
 
-## Quick Start CLI
+## Verified Usage Examples
+
+### 1. Command-Line Interface (CLI)
 
 ```bash
-# Inspect synthetic or real URL payloads
-miniwaf test --url "http://example.com/search?q=1%20UNION%20SELECT%20null"
+# List all active WAF inspection rules
+miniwaf rules
 
-# Test POST body payloads
-miniwaf test --url "/api/comments" --method POST --body "<script>alert(1)</script>"
+# Test a suspicious payload against active filters
+miniwaf test "1' UNION SELECT username, password FROM users--"
 
-# List all registered OWASP CRS rules
-miniwaf rules --category SQLI
+# Test an XSS payload
+miniwaf test "<img src=x onerror=alert(1)>"
 
-# Release an IP address from temporary jail
-miniwaf unjail 192.168.1.55
+# Release a temporarily jailed client IP
+miniwaf unjail 192.168.1.50
+```
+
+### 2. Running as a Reverse Proxy
+
+```bash
+# Start WAF reverse proxy forwarding to upstream backend on port 8080
+uvicorn miniwaf.proxy.server:app --host 127.0.0.1 --port 8000
 ```
 
 ---
 
-## Embedding as ASGI Middleware
-
-Drop MiniWAF directly into any existing FastAPI or Starlette application:
-
-```python
-from fastapi import FastAPI
-from miniwaf.proxy.middleware import MiniWAFASGIMiddleware
-
-app = FastAPI()
-
-# Mount MiniWAF middleware
-app.add_middleware(MiniWAFASGIMiddleware)
-
-
-@app.get("/")
-def home():
-    return {"message": "Protected by MiniWAF"}
-```
-
----
-
-## Running the Management REST API
+## Testing & Quality Gates
 
 ```bash
-uvicorn miniwaf.api.app:app --host 0.0.0.0 --port 8083
-```
+# Run unit and rule evaluation tests
+pytest --cov=miniwaf --cov-report=term-missing
 
-Or using Docker Compose:
-
-```bash
-docker compose up -d
-```
-
-### Endpoints
-
-- `GET /health`: Operational health check.
-- `GET /api/v1/rules`: List all registered detection rules.
-- `GET /api/v1/stats`: Live telemetry, mode, threshold, and active jail count.
-- `GET /api/v1/jailed`: List currently banned IPs and remaining ban seconds.
-- `POST /api/v1/inspect`: Test an HTTP transaction against WAF engine.
-- `POST /api/v1/unjail`: Unjail a client IP address.
-
----
-
-## Verification & Quality Gates
-
-Run the automated test suite with coverage and security checks:
-
-```bash
-# Run pytest with 90%+ coverage gate
-pytest --cov=miniwaf --cov-report=term-missing --cov-fail-under=90
-
-# Static type checking
-mypy src tests
-
-# Code style and formatting
+# Linting and static analysis
 ruff check .
 ruff format --check .
-
-# Security AST scanner
-bandit -r src/ -c pyproject.toml
+mypy src/miniwaf
 ```
 
 ---
 
-## License
+## Security Model & Threat Boundaries
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- **Inline Protection:** Malicious payloads are intercepted and terminated at the proxy boundary; upstream backends never process malicious requests.
+- **Fail-Safe Design:** If an internal rule parsing exception occurs, the system defaults to safe logging rather than exposing server tracebacks.
+- **Normalization Boundaries:** While normalization handles standard evasions, novel zero-day parser differential exploits in upstream web frameworks require defense-in-depth parameterized database queries.
+
+---
+
+## Limitations & Known Issues
+
+- **Streaming Payloads:** Very large multi-part file uploads (>100MB) bypass deep regex inspection to avoid memory exhaustion and are evaluated by header boundaries.
+- **WebSocket Inspection:** Full duplex WebSocket frame payload inspection is planned for the next minor release.
+
+---
+
+## License & Responsible Use
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+> [!NOTE]
+> Designed for defensive web application protection, application security research, and WAF evaluation.
